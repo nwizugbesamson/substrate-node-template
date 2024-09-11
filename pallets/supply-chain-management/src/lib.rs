@@ -1115,7 +1115,12 @@ pub mod pallet {
             pickup_locations: Vec<(Vec<u8>, Vec<u8>)>,
             delivery_locations: Vec<(Vec<u8>, Vec<u8>)>,
             manifests: Option<Vec<T::UniqueId>>,
-        }
+        },
+
+        ResourcesRetreived {
+            name: Vec<u8>,
+            resources: Vec<T::UniqueId>
+        },
 
     }
 
@@ -1128,7 +1133,16 @@ pub mod pallet {
 
     impl<T: Config> Pallet<T> {
         
-        
+        pub fn generate_unique_id() -> T::UniqueId {
+            // let random_seed = <pallet_randomness_collective_flip::Module<T> as Randomness<T::Hash>>::random_seed();
+            // let payload = (
+            //     b"supply-chain-management",
+            //     random_seed,
+            //     frame_system::Pallet::<T>::extrinsic_index(),
+            // );
+            // T::UniqueId::decode(&mut TrailingZeroInput::new(blake2_128(&payload).to_vec())).unwrap_or_default()
+            T::UniqueId::default()
+        }
     }
 
     #[pallet::call]
@@ -1219,7 +1233,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(17)]
+        #[pallet::call_index(5)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_manufacturer(
             origin: OriginFor<T>, manufacturer_id: T::AccountId
@@ -1248,7 +1262,7 @@ pub mod pallet {
 
         
 
-        #[pallet::call_index(5)]
+        #[pallet::call_index(6)]
 		#[pallet::weight(T::WeightInfo::do_something())]
 		pub fn get_suppliers(
 			origin: OriginFor<T>
@@ -1261,7 +1275,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(18)]
+        #[pallet::call_index(7)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_supplier(
             origin: OriginFor<T>, supplier_id: T::AccountId
@@ -1288,7 +1302,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(19)]
+        #[pallet::call_index(8)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_shipping_agent(
             origin: OriginFor<T>, shipping_agent_id: T::AccountId
@@ -1315,7 +1329,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(6)]
+        #[pallet::call_index(9)]
 		#[pallet::weight(T::WeightInfo::do_something())]
 		pub fn get_shipping_agents(
 			origin: OriginFor<T>
@@ -1328,32 +1342,52 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(7)]
+        #[pallet::call_index(10)]
 		#[pallet::weight(T::WeightInfo::do_something())]
 		pub fn get_raw_materials(
-			_origin: OriginFor<T>
+			origin: OriginFor<T>
 		) -> DispatchResult{
-
+            let _sender = ensure_signed(origin)?;
+            let raw_materials = RawMaterials::<T>::iter().map(|(material_id, _)| material_id).collect();
+            Self::deposit_event(Event::ResourcesRetreived {
+                name: b"Raw Materials".to_vec(),
+                resources: raw_materials
+            });
             Ok(())
         }
 
-        #[pallet::call_index(8)]
+        #[pallet::call_index(11)]
+        #[pallet::weight(T::WeightInfo::do_something())]
+        pub fn register_raw_material(
+            origin: OriginFor<T>, name: Vec<u8>, price: u32
+        ) -> DispatchResult{
+            let account_id = ensure_signed(origin)?;
+            let material_id = Self::generate_unique_id();
+            let raw_material = RawMaterial::new(material_id.clone(), name, price);
+            let raw_material_shipping = RawMaterialShipping::new((b"pickup".to_vec(), b"location".to_vec()));
+            RawMaterials::<T>::insert(material_id.clone(), (raw_material, raw_material_shipping));
+            Ok(())
+        }
+
+        #[pallet::call_index(12)]
 		#[pallet::weight(T::WeightInfo::do_something())]
 		pub fn order_raw_material(
 			_origin: OriginFor<T>
 		) -> DispatchResult{
+
             Ok(())
         }
 
-        #[pallet::call_index(9)]
+        #[pallet::call_index(13)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_orders(
             _origin: OriginFor<T>
         ) -> DispatchResult{
+            
             Ok(())
         }
 
-        #[pallet::call_index(10)]
+        #[pallet::call_index(14)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn create_shipping(
             _origin: OriginFor<T>
@@ -1361,7 +1395,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(11)]
+        #[pallet::call_index(15)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_shipping_manifests(
             _origin: OriginFor<T>
@@ -1369,7 +1403,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(12)]
+        #[pallet::call_index(16)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn update_shipping_location(
             _origin: OriginFor<T>
@@ -1377,7 +1411,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(13)]
+        #[pallet::call_index(17)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn complete_shipment(
             _origin: OriginFor<T>
@@ -1385,7 +1419,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(14)]
+        #[pallet::call_index(18)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_raw_material_unit_data(
             _origin: OriginFor<T>
@@ -1393,7 +1427,7 @@ pub mod pallet {
             Ok(())
         }
 
-        #[pallet::call_index(15)]
+        #[pallet::call_index(19)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn set_raw_material_unit_access_level(
             _origin: OriginFor<T>
