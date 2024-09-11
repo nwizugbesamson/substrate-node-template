@@ -154,9 +154,38 @@ pub mod pallet {
             }
         }
     
-        // Get raw material units for a specific raw material ID
         pub fn get_units(&self, raw_material_id: &T::UniqueId) -> Option<&Vec<T::UniqueId>> {
             self.raw_materials.get(raw_material_id)
+        }
+
+        pub fn has_material_in_inventory(&self, raw_material_id: &T::UniqueId, quantity: u32) -> bool {
+            self.raw_materials.contains_key(raw_material_id) && 
+            self.raw_materials.get(raw_material_id).unwrap().len() >= quantity as usize
+        }
+
+        pub fn get_unit_from_material(&self, raw_material_id: &T::UniqueId) -> Option<T::UniqueId> {
+            if let Some(units) = self.raw_materials.get(raw_material_id) {
+                units.last().cloned()
+            } else {
+                None
+            }
+        }
+
+        pub fn remove_unit_from_material(
+            &mut self, 
+            raw_material_id: &T::UniqueId,
+            raw_material_unit_id: &T::UniqueId
+        ) -> bool {
+            if let Some(units) = self.raw_materials.get_mut(raw_material_id) {
+                if units.contains(raw_material_unit_id) {
+                    units.retain(|unit| unit != raw_material_unit_id);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
         }
         
     }
@@ -310,15 +339,15 @@ pub mod pallet {
             self.delivery_locations.retain(|location| location != &delivery_location);
         }
 
-        pub fn can_pickup_from(&self, pickup_location: (Vec<u8>, Vec<u8>)) -> bool {
-            self.pickup_locations.contains(&pickup_location)
+        pub fn can_pickup_from(&self, pickup_location: &(Vec<u8>, Vec<u8>)) -> bool {
+            self.pickup_locations.contains(pickup_location)
         }
 
-        pub fn can_deliver_to(&self, delivery_location: (Vec<u8>, Vec<u8>)) -> bool {
-            self.delivery_locations.contains(&delivery_location)
+        pub fn can_deliver_to(&self, delivery_location: &(Vec<u8>, Vec<u8>)) -> bool {
+            self.delivery_locations.contains(delivery_location)
         }
 
-        pub fn can_ship(&self, pickup_location: (Vec<u8>, Vec<u8>), delivery_location: (Vec<u8>, Vec<u8>)) -> bool {
+        pub fn can_ship(&self, pickup_location: &(Vec<u8>, Vec<u8>), delivery_location: &(Vec<u8>, Vec<u8>)) -> bool {
             self.can_pickup_from(pickup_location) && self.can_deliver_to(delivery_location)
         }
     }
@@ -621,6 +650,10 @@ pub mod pallet {
             self.shipping_agents.clone()
         }
 
+        pub fn has_shipping_agent(&self, shipping_agent: &T::AccountId) -> bool {
+            self.shipping_agents.contains(&shipping_agent)
+        }
+
         pub fn get_pickup_location(&self) -> (Vec<u8>, Vec<u8>) {
             self.pickup_location.clone()
         }
@@ -878,6 +911,7 @@ pub mod pallet {
         InProgress,
         Completed,
         Cancelled,
+        Confirmed,
     }
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
     pub struct Order<T: Config> {
@@ -886,7 +920,7 @@ pub mod pallet {
         pub manufacturer: T::AccountId,
         pub raw_material_units: Vec<T::UniqueId>,
         pub shipping_agent: T::AccountId,
-        pub shipping_manifest: T::UniqueId,
+        pub shipping_manifest: Option<T::UniqueId>,
         pub delivery_token: T::UniqueId,
         pub status: OrderStatus,
     }
@@ -895,16 +929,16 @@ pub mod pallet {
         pub fn new(
             order_id: T::UniqueId, supplier: T::AccountId, 
             manufacturer: T::AccountId, 
-            shipping_agent: T::AccountId, shipping_manifest: T::UniqueId,
+            shipping_agent: T::AccountId, raw_material_units: Vec<T::UniqueId>,
             delivery_token:T::UniqueId, status: OrderStatus
         ) -> Self {
             Self {
                 order_id,
                 supplier,
                 manufacturer,
-                raw_material_units: Vec::new(),
+                raw_material_units,
                 shipping_agent,
-                shipping_manifest,
+                shipping_manifest: None,
                 delivery_token,
                 status,
             }
@@ -938,16 +972,14 @@ pub mod pallet {
             self.raw_material_units.clone()
         }
 
-        pub fn add_raw_material_units(&mut self, raw_material_unit: Vec<T::UniqueId>) {
-            self.raw_material_units.extend(raw_material_unit);
-        }
+        
 
         pub fn get_shipping_agent(&self) -> T::AccountId {
             self.shipping_agent.clone()
         }
 
-        pub fn get_shipping_manifest(&self) -> T::UniqueId {
-            self.shipping_manifest.clone()
+        pub fn get_shipping_manifest(&self) -> Option<T::UniqueId> {
+            Some(self.shipping_manifest.clone()?)
         }
 
         pub fn get_status(&self) -> OrderStatus {
@@ -1123,6 +1155,15 @@ pub mod pallet {
             resources: Vec<T::UniqueId>
         },
 
+        OrderCreated {
+            order_id: T::UniqueId,
+            supplier: T::AccountId,
+            manufacturer: T::AccountId,
+            raw_material_units: Vec<T::UniqueId>,
+            shipping_agent: T::AccountId,
+            status: OrderStatus,
+        },
+
     }
 
 
@@ -1132,6 +1173,9 @@ pub mod pallet {
         ResourceDoesNotExist,
         UnathorisedRequest,
         InvalidShippingAgents,
+        InsufficientUnits,
+        UnsupportedShippingAgent,
+        PaymentFailed,
     }
 
     impl<T: Config> Pallet<T> {
@@ -1380,7 +1424,7 @@ pub mod pallet {
                     // Try to get the shipping agent from storage
                     if let Some(agent_data) = ShippingAgents::<T>::get(agent) {
                         // Check if the agent can pick up from the location
-                        if agent_data.can_pickup_from(location.clone()) {
+                        if agent_data.can_pickup_from(&location) {
                             // If they can, return the agent
                             Some(agent.clone())
                         } else {
@@ -1453,8 +1497,101 @@ pub mod pallet {
         #[pallet::call_index(12)]
 		#[pallet::weight(T::WeightInfo::do_something())]
 		pub fn order_raw_material(
-			_origin: OriginFor<T>
+            origin: OriginFor<T>,
+			material_id: T::UniqueId,
+            supplier_id: T::AccountId,
+            quantity: u32,
+            shipping_agent_id: T::AccountId,
+            shipping_destination: (Vec<u8>, Vec<u8>),
 		) -> DispatchResult{
+            let buyer_account = ensure_signed(origin)?;
+
+            let mut manufacturer = Manufacturers::<T>::get(&buyer_account).ok_or(
+                Error::<T>::UnathorisedRequest)?;
+            
+            let mut supplier = Suppliers::<T>::get(&supplier_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+
+            ensure!(
+                supplier.material_manager.has_material_in_inventory(&material_id, quantity),
+                Error::<T>::InsufficientUnits
+            );
+            
+            let (_, raw_material_shipping) = RawMaterials::<T>::get(
+                &material_id
+            ).ok_or(
+                Error::<T>::ResourceDoesNotExist
+            )?;
+
+            ensure!(
+                raw_material_shipping.has_shipping_agent(&shipping_agent_id),
+                Error::<T>::UnsupportedShippingAgent
+            );
+
+            let shipping_agent = ShippingAgents::<T>::get(&shipping_agent_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            
+            ensure!(
+                shipping_agent.can_ship(
+                    &raw_material_shipping.get_pickup_location(), 
+                    &shipping_destination),
+                Error::<T>::UnsupportedShippingAgent
+            );
+
+            let mut units = Vec::new();
+
+            for _ in 0..quantity {
+
+                let unit_id = supplier.material_manager.get_unit_from_material(&material_id).ok_or(
+                    Error::<T>::InsufficientUnits
+                )?;
+                let mut raw_material_unit = RawMaterialUnits::<T>::get(&unit_id).ok_or(
+                    Error::<T>::ResourceDoesNotExist
+                )?;
+                // transfer token for payment
+                // Self::make_payment(
+                //     &buyer_account, &supplier_id, raw_material.get_price()
+                // ).map_err(|_| Error::<T>::PaymentFailed)?;
+
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Owner(
+                        Some(Owner::new(
+                            buyer_account.clone(),
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+                units.push(unit_id.clone());
+                supplier.material_manager.remove_unit_from_material(&material_id, &unit_id);
+                manufacturer.material_manager.add_units_to_raw_material(material_id.clone(), vec![unit_id.clone()]);
+                
+                RawMaterialUnits::<T>::insert(unit_id.clone(), raw_material_unit);
+            }
+
+            let order_id = Self::generate_unique_id();
+            let delivery_token = Self::generate_unique_id();
+            let order = Order::<T>::new(
+                order_id.clone(), supplier_id.clone(), buyer_account.clone(),
+               shipping_agent_id.clone(),   units.clone(),
+                delivery_token.clone(), 
+                OrderStatus::Confirmed
+            );
+
+            Manufacturers::<T>::insert(buyer_account.clone(), manufacturer);
+            Suppliers::<T>::insert(supplier_id.clone(), supplier);
+            Orders::<T>::insert(order_id.clone(), order);
+
+            Self::deposit_event(Event::OrderCreated {
+                order_id: order_id,
+                supplier: supplier_id,
+                manufacturer: buyer_account,
+                raw_material_units: units,
+                shipping_agent: shipping_agent_id.clone(),
+                status: OrderStatus::Confirmed
+            });
+            
+            
 
             Ok(())
         }
@@ -1470,7 +1607,7 @@ pub mod pallet {
 
         #[pallet::call_index(14)]
         #[pallet::weight(T::WeightInfo::do_something())]
-        pub fn create_shipping(
+        pub fn create_shipment(
             _origin: OriginFor<T>
         ) -> DispatchResult{
             Ok(())
