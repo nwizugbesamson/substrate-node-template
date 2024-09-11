@@ -26,8 +26,7 @@ pub use weights::*;
 
 #[frame_support::pallet]
 pub mod pallet {
-	
-	use super::*;
+    use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 	use scale_info::TypeInfo;
@@ -605,10 +604,12 @@ pub mod pallet {
     }
 
     impl <T: Config> RawMaterialShipping<T> {
-        pub fn new(pickup_location: (Vec<u8>, Vec<u8>)) -> Self {
+        pub fn new(
+            pickup_location: (Vec<u8>, Vec<u8>), shipping_agents: Vec<T::AccountId>
+        ) -> Self {
             Self {
                 pickup_location,
-                shipping_agents: Vec::new(),
+                shipping_agents,
             }
         }
 
@@ -1129,6 +1130,8 @@ pub mod pallet {
 	pub enum Error<T> {
         ActorAlreadyExists,
         ResourceDoesNotExist,
+        UnathorisedRequest,
+        InvalidShippingAgents,
     }
 
     impl<T: Config> Pallet<T> {
@@ -1142,6 +1145,11 @@ pub mod pallet {
             // );
             // T::UniqueId::decode(&mut TrailingZeroInput::new(blake2_128(&payload).to_vec())).unwrap_or_default()
             T::UniqueId::default()
+        }
+
+        pub fn get_current_block_number() -> u32 {
+            // frame_system::Pallet::<T>::block_number();
+            0
         }
     }
 
@@ -1359,13 +1367,86 @@ pub mod pallet {
         #[pallet::call_index(11)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn register_raw_material(
-            origin: OriginFor<T>, name: Vec<u8>, price: u32
+            origin: OriginFor<T>, name: Vec<u8>, price: u32,
+            quantity: u32, location: (Vec<u8>, Vec<u8>), shipping_agents: Vec<T::AccountId>
         ) -> DispatchResult{
-            let account_id = ensure_signed(origin)?;
+            let sender = ensure_signed(origin)?;
+            let mut supplier = Suppliers::<T>::get(&sender).ok_or(
+                Error::<T>::UnathorisedRequest)?;
+            
+            let eligible_shipping_agents: Vec<T::AccountId> = shipping_agents
+                .iter()
+                .filter_map(|agent| {
+                    // Try to get the shipping agent from storage
+                    if let Some(agent_data) = ShippingAgents::<T>::get(agent) {
+                        // Check if the agent can pick up from the location
+                        if agent_data.can_pickup_from(location.clone()) {
+                            // If they can, return the agent
+                            Some(agent.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            ensure!(
+                eligible_shipping_agents.len() > 0, 
+                Error::<T>::InvalidShippingAgents
+            );
             let material_id = Self::generate_unique_id();
-            let raw_material = RawMaterial::new(material_id.clone(), name, price);
-            let raw_material_shipping = RawMaterialShipping::new((b"pickup".to_vec(), b"location".to_vec()));
+            let mut raw_material = RawMaterial::<T>::new(
+                material_id.clone(), name, price
+            );
+
+            for _ in  0..quantity {
+                let unit_id = Self::generate_unique_id();
+                let mut raw_material_unit = RawMaterialUnit::<T>::new(unit_id.clone(), material_id.clone());
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Owner(
+                        Some(Owner::new(
+                            sender.clone(),
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Custodian(
+                        Some(Custodian::new(
+                            sender.clone(), 
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+                
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Location(
+                        Some(Location::new(
+                            location.0.clone(),
+                            location.1.clone(),
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+
+                raw_material.add_units(vec![unit_id.clone()]);
+
+                RawMaterialUnits::<T>::insert(unit_id.clone(), raw_material_unit);
+            }
+            supplier.material_manager.add_units_to_raw_material(material_id.clone(), raw_material.get_units());
+
+            let raw_material_shipping = RawMaterialShipping::<T>::new(
+                location.clone(), eligible_shipping_agents
+
+            );
             RawMaterials::<T>::insert(material_id.clone(), (raw_material, raw_material_shipping));
+            // Save the updated supplier back to storage
+            Suppliers::<T>::insert(&sender, supplier);
+
             Ok(())
         }
 
