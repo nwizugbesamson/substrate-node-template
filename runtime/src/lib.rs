@@ -54,6 +54,8 @@ pub type Signature = MultiSignature;
 /// to the public key of our transaction signing scheme.
 pub type AccountId = <<Signature as Verify>::Signer as IdentifyAccount>::AccountId;
 
+
+
 /// Balance of an account.
 pub type Balance = u128;
 
@@ -249,6 +251,7 @@ impl pallet_sudo::Config for Runtime {
 impl pallet_supply_chain_management::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = pallet_supply_chain_management::weights::SubstrateWeight<Runtime>;
+	type UniqueId = Vec<u8>;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -291,7 +294,7 @@ mod runtime {
 
 	// Include the custom logic from the pallet-supply-chain-management in the runtime.
 	#[runtime::pallet_index(7)]
-	pub type TemplateModule = pallet_supply_chain_management;
+	pub type SupplyChainManagementModule = pallet_supply_chain_management;
 }
 
 /// The address format for describing accounts.
@@ -341,7 +344,7 @@ mod benches {
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
 		[pallet_sudo, Sudo]
-		[pallet_supply_chain_management, TemplateModule]
+		[pallet_supply_chain_management, SupplyChainManagementModule]
 	);
 }
 
