@@ -28,7 +28,7 @@ pub use weights::*;
 pub mod pallet {
     use super::*;
 	use frame_support::pallet_prelude::*;
-	use frame_system::pallet_prelude::*;
+use frame_system::pallet_prelude::*;
 	use scale_info::TypeInfo;
     use sp_std::collections::btree_map::BTreeMap;
     use sp_std::marker::PhantomData;
@@ -438,7 +438,38 @@ pub mod pallet {
     pub trait HasProprietaryData<T: Config> {
     
         // Method to be implemented by structs
-        fn get_data(&self, actor_type: AccessLevel) -> ProprietaryDataResult<T>;
+        fn get_data(&self, actor_type: AccessLevel
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>);
+
+        fn get_data_result(&self, data: ProprietaryDataResult<T>
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>) {
+            (
+                data,
+                Some(self.get_index()),
+                Some(self.get_data_manager().get_start_time()),
+                self.get_data_manager().get_end_time(),
+            )
+        }
+
+        fn get_restricted_data(&self
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>) {
+            (
+                ProprietaryDataResult::Restricted(b"Data is restricted".to_vec()),
+                Some(self.get_index()),
+                None,
+                None,
+            )
+        }
+
+        fn get_not_found_data(&self
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>) {
+            (
+                ProprietaryDataResult::NotFound(b"Data not found".to_vec()),
+                None,
+                None,
+                None,
+            )
+        }
     
         // Default implementation for checking if data is active
         fn is_active(&self) -> bool {
@@ -492,12 +523,13 @@ pub mod pallet {
     }
 
     impl <T: Config> HasProprietaryData<T> for Owner<T> {
-        fn get_data(&self, actor_type: AccessLevel) -> ProprietaryDataResult<T> {
+        fn get_data(&self, actor_type: AccessLevel
+        )-> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>)
+        {
             if self.data.can_view(actor_type) {
-                // TODO: Return owner, start_time, end_time as a single object
-                ProprietaryDataResult::Owner(self.owner.clone())
+                self.get_data_result(ProprietaryDataResult::Owner(self.owner.clone()))
             } else {
-                ProprietaryDataResult::Restricted(b"You do not have access to this data".to_vec())  
+                 self.get_restricted_data() 
             }
         }
 
@@ -527,14 +559,17 @@ pub mod pallet {
     }
 
     impl <T: Config> HasProprietaryData<T> for Custodian<T> {
-        fn get_data(&self, actor_type: AccessLevel) -> ProprietaryDataResult<T> {
+        fn get_data(&self, actor_type: AccessLevel
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>) 
+        {
             if self.data.can_view(actor_type) {
-                ProprietaryDataResult::Custodian(self.custodian.clone())
+                self.get_data_result(ProprietaryDataResult::Custodian(self.custodian.clone()))
             } else {
-                ProprietaryDataResult::Restricted(b"You do not have access to this data".to_vec())
+                self.get_restricted_data()
             }
         }
 
+        
         fn get_data_manager(&self) -> &ProprietaryData {
             &self.data
         }
@@ -565,11 +600,15 @@ pub mod pallet {
     }
 
     impl <T: Config> HasProprietaryData<T> for Location<T> {
-        fn get_data(&self, actor_type: AccessLevel) -> ProprietaryDataResult<T> {
+        fn get_data(&self, actor_type: AccessLevel
+        ) -> (ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>) 
+        {
             if self.data.can_view(actor_type) {
-                ProprietaryDataResult::Location((self.longitude.clone(), self.latitude.clone()))
+                self.get_data_result(
+                    ProprietaryDataResult::Location((self.longitude.clone(), self.latitude.clone()))
+                )
             } else {
-                ProprietaryDataResult::Restricted(b"You do not have access to this data".to_vec())
+                self.get_restricted_data()
             }
         }
 
@@ -664,6 +703,8 @@ pub mod pallet {
         Owner(Option<Owner<T>>),
         Custodian(Option<Custodian<T>>),
         Location(Option<Location<T>>),
+        Invalid(Option<Vec<u8>>),
+        
     }
 
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
@@ -699,20 +740,23 @@ pub mod pallet {
         ) -> Vec<ProprietaryDataResult<T>> {
             match input {
                 ProprietaryDataInput::Owner(_owner) => {
-                    self.owners.iter().map(|owner| owner.get_data(AccessLevel::Owner)).collect()
+                    self.owners.iter().map(|owner| owner.get_data(AccessLevel::Owner).0).collect()
                 },
                 ProprietaryDataInput::Custodian(_custodian) => {
-                    self.custodians.iter().map(|custodian| custodian.get_data(AccessLevel::Owner)).collect()
+                    self.custodians.iter().map(|custodian| custodian.get_data(AccessLevel::Owner).0).collect()
                 },
                 ProprietaryDataInput::Location(_location) => {
-                    self.locations.iter().map(|location| location.get_data(AccessLevel::Owner)).collect()
+                    self.locations.iter().map(|location| location.get_data(AccessLevel::Owner).0).collect()
+                },
+                ProprietaryDataInput::Invalid(_) => {
+                    Vec::new()
                 },
             }
         }
 
         pub fn get_proprietary_data_history_for_actor(
             &self, actor_type: AccessLevel, input: ProprietaryDataInput<T>
-        ) -> Vec<ProprietaryDataResult<T>> {
+        ) -> Vec<(ProprietaryDataResult<T>, Option<u32>, Option<u32>, Option<u32>)> {
             match input {
                 ProprietaryDataInput::Owner(_owner) => {
                     self.owners.iter().map(|owner| {
@@ -730,6 +774,9 @@ pub mod pallet {
                         |location| location.get_data(actor_type.clone())
                     ).collect()
                 },
+                ProprietaryDataInput::Invalid(_) => {
+                    Vec::new()
+                },
             }
         }
 
@@ -739,7 +786,7 @@ pub mod pallet {
                 ProprietaryDataInput::Owner(_) => {
                     // Find the current (active) owner
                     if let Some(current_owner) = self.owners.iter().find(|owner| owner.is_active()) {
-                        current_owner.get_data(AccessLevel::Owner)
+                        current_owner.get_data(AccessLevel::Owner).0
                     } else {
                         ProprietaryDataResult::NotFound(b"No active owner found".to_vec())
                     }
@@ -747,7 +794,7 @@ pub mod pallet {
                 ProprietaryDataInput::Custodian(_) => {
                     // Find the current (active) custodian
                     if let Some(current_custodian) = self.custodians.iter().find(|custodian| custodian.is_active()) {
-                        current_custodian.get_data(AccessLevel::Owner)
+                        current_custodian.get_data(AccessLevel::Owner).0
                     } else {
                         ProprietaryDataResult::NotFound(b"No active custodian found".to_vec())
                     }
@@ -755,10 +802,13 @@ pub mod pallet {
                 ProprietaryDataInput::Location(_) => {
                     // Find the current (active) location
                     if let Some(current_location) = self.locations.iter().find(|location| location.is_active()) {
-                        current_location.get_data(AccessLevel::Owner)
+                        current_location.get_data(AccessLevel::Owner).0
                     } else {
                         ProprietaryDataResult::NotFound(b"No active location found".to_vec())
                     }
+                },
+                ProprietaryDataInput::Invalid(_) => {
+                    ProprietaryDataResult::NotFound(b"Invalid input".to_vec())
                 },
             }
         }
@@ -820,6 +870,8 @@ pub mod pallet {
                     self.locations.push(new_data);
                 },
                 ProprietaryDataInput::Location(None) => {},
+                ProprietaryDataInput::Invalid(_) => {},
+
             }
         }
 
@@ -861,12 +913,12 @@ pub mod pallet {
         }
         
         
-        pub fn set_visibility(
+        pub fn set_access_level(
             &mut self, input: ProprietaryDataInput<T>, 
             visibility: AccessLevel, actor_id: T::AccountId,
             index: u32
 
-        ) -> bool{
+        ) -> bool {
             if !self.is_owner(actor_id) {
                 // The actor is not the current owner, so they cannot set visibility
                 return false;
@@ -896,6 +948,7 @@ pub mod pallet {
                         return true;
                     }
                 },
+                ProprietaryDataInput::Invalid(_) => {},
             }
             false
 
@@ -918,33 +971,39 @@ pub mod pallet {
         pub order_id: T::UniqueId,
         pub supplier: T::AccountId,
         pub manufacturer: T::AccountId,
+        pub material_id: T::UniqueId,
         pub raw_material_units: Vec<T::UniqueId>,
         pub shipping_agent: T::AccountId,
         pub shipping_manifest: Option<T::UniqueId>,
+        pub delivery_location: (Vec<u8>, Vec<u8>),
         pub delivery_token: T::UniqueId,
-        pub status: OrderStatus,
+        pub status: Vec<OrderStatus>,
     }
 
     impl <T: Config> Order<T> {
         pub fn new(
             order_id: T::UniqueId, supplier: T::AccountId, 
             manufacturer: T::AccountId, 
-            shipping_agent: T::AccountId, raw_material_units: Vec<T::UniqueId>,
+            shipping_agent: T::AccountId, 
+            material_id: T::UniqueId, raw_material_units: Vec<T::UniqueId>,
+            delivery_location: (Vec<u8>, Vec<u8>),
             delivery_token:T::UniqueId, status: OrderStatus
         ) -> Self {
             Self {
                 order_id,
                 supplier,
                 manufacturer,
+                material_id,
                 raw_material_units,
                 shipping_agent,
                 shipping_manifest: None,
+                delivery_location,
                 delivery_token,
-                status,
+                status: vec![status],
             }
         }
 
-        pub fn get_order_id(&self) -> T::UniqueId {
+        pub fn get_id(&self) -> T::UniqueId {
             self.order_id.clone()
         }
 
@@ -952,16 +1011,24 @@ pub mod pallet {
             self.supplier.clone()
         }
 
-        pub fn is_supplier(&self, supplier_id: T::AccountId) -> bool {
-            self.supplier == supplier_id
+        pub fn get_material_id(&self) -> T::UniqueId {
+            self.material_id.clone()
         }
 
-        pub fn is_manufacturer(&self, manufacturer_id: T::AccountId) -> bool {
-            self.manufacturer == manufacturer_id
+        pub fn get_delivery_location(&self) -> (Vec<u8>, Vec<u8>) {
+            self.delivery_location.clone()
         }
 
-        pub fn is_shipping_agent(&self, shipping_agent_id: T::AccountId) -> bool {
-            self.shipping_agent == shipping_agent_id
+        pub fn is_supplier(&self, supplier_id: &T::AccountId) -> bool {
+            &self.supplier == supplier_id
+        }
+
+        pub fn is_manufacturer(&self, manufacturer_id: &T::AccountId) -> bool {
+            &self.manufacturer == manufacturer_id
+        }
+
+        pub fn is_shipping_agent(&self, shipping_agent_id: &T::AccountId) -> bool {
+            &self.shipping_agent == shipping_agent_id
         }
 
         pub fn get_manufacturer(&self) -> T::AccountId {
@@ -972,7 +1039,9 @@ pub mod pallet {
             self.raw_material_units.clone()
         }
 
-        
+        pub fn set_shipping_manifest(&mut self, shipping_manifest: T::UniqueId) {
+            self.shipping_manifest = Some(shipping_manifest);
+        }
 
         pub fn get_shipping_agent(&self) -> T::AccountId {
             self.shipping_agent.clone()
@@ -983,15 +1052,15 @@ pub mod pallet {
         }
 
         pub fn get_status(&self) -> OrderStatus {
-            self.status.clone()
+            self.status.last().cloned().unwrap()
         }
 
-        pub fn set_status(&mut self, status: OrderStatus) {
-            self.status = status;
+        pub fn add_status(&mut self, status: OrderStatus) {
+            self.status.push(status);
         }
 
         pub fn get_delivery_token(&self, actor: T::AccountId) -> Option<T::UniqueId> {
-            if self.is_manufacturer(actor) {
+            if self.is_manufacturer(&actor) {
                 Some(self.delivery_token.clone())
             } else {
                 None
@@ -999,16 +1068,15 @@ pub mod pallet {
             }
         }
 
-        pub fn is_delivery_token(&self, delivery_token: T::UniqueId) -> bool {
-
-            self.delivery_token == delivery_token
+        pub fn is_delivery_token(&self, delivery_token: &T::UniqueId) -> bool {
+            &self.delivery_token == delivery_token
         }
     }
 
     #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
     pub struct ShippingManifest<T: Config> {
         pub manifest_id: T::UniqueId,
-        pub order_id: Option<T::UniqueId>,
+        pub order_id: T::UniqueId,
         pub shipping_agent: T::AccountId,
         pub pickup_location: (Vec<u8>, Vec<u8>),
         pub delivery_location: (Vec<u8>, Vec<u8>),
@@ -1019,13 +1087,14 @@ pub mod pallet {
 
     impl <T: Config> ShippingManifest<T> {
         pub fn new(
-            manifest_id: T::UniqueId, shipping_agent: T::AccountId, 
+            manifest_id: T::UniqueId, order_id: T::UniqueId, 
+            shipping_agent: T::AccountId, 
             pickup_location: (Vec<u8>, Vec<u8>), delivery_location: (Vec<u8>, Vec<u8>),
             raw_material_units: Vec<T::UniqueId>, status: OrderStatus
         ) -> Self {
             Self {
                 manifest_id,
-                order_id: None,
+                order_id,
                 shipping_agent,
                 pickup_location,
                 delivery_location,
@@ -1039,12 +1108,12 @@ pub mod pallet {
             self.manifest_id.clone()
         }
 
-        pub fn get_order_id(&self) -> Option<T::UniqueId> {
+        pub fn get_order_id(&self) -> T::UniqueId {
             self.order_id.clone()
         }
 
-        pub fn set_order_id(&mut self, order_id: T::UniqueId) {
-            self.order_id = Some(order_id);
+        pub fn get_raw_material_units(&self) -> Vec<T::UniqueId> {
+            self.raw_material_units.clone()
         }
 
         pub fn get_shipping_agent(&self) -> T::AccountId {
@@ -1059,15 +1128,15 @@ pub mod pallet {
             self.delivery_location.clone()
         }
 
-        pub fn is_delivery_location(&self, delivery_location: (Vec<u8>, Vec<u8>)) -> bool {
-            self.delivery_location == delivery_location
+        pub fn is_delivery_location(&self, delivery_location: &(Vec<u8>, Vec<u8>)) -> bool {
+            &self.delivery_location == delivery_location
         }
 
-        pub fn is_shipping_agent(&self, shipping_agent_id: T::AccountId) -> bool {
-            self.shipping_agent == shipping_agent_id
+        pub fn is_shipping_agent(&self, shipping_agent_id: &T::AccountId) -> bool {
+            &self.shipping_agent == shipping_agent_id
         }
 
-        pub fn add_route_history(&mut self, location: (Vec<u8>, Vec<u8>), actor_id: T::AccountId) {
+        pub fn add_route_history(&mut self, location: (Vec<u8>, Vec<u8>), actor_id: &T::AccountId) {
             if self.is_shipping_agent(actor_id) {
                 self.route_history.push(location);
             } else {
@@ -1159,10 +1228,45 @@ pub mod pallet {
             order_id: T::UniqueId,
             supplier: T::AccountId,
             manufacturer: T::AccountId,
+            material_id: T::UniqueId,
             raw_material_units: Vec<T::UniqueId>,
             shipping_agent: T::AccountId,
             status: OrderStatus,
         },
+
+        OrderShipped {
+            order_id: T::UniqueId,
+            manifest_id: T::UniqueId,
+            shipping_agent: T::AccountId,
+            status: OrderStatus,
+        },
+
+        ShippingLocationUpdated {
+            manifest_id: T::UniqueId,
+            location: (Vec<u8>, Vec<u8>),
+            shipping_agent: T::AccountId,
+        },
+
+        OrderCompleted {
+            order_id: T::UniqueId,
+            manifest_id: T::UniqueId,
+            status: OrderStatus,
+        },
+
+        RawMaterialUnitDataRetrieved {
+            material_id: T::UniqueId,
+            material_name: Vec<u8>,
+            material_price: u32,
+            unit_id: T::UniqueId,
+            owner_history: Vec<(Option<T::AccountId>, Option<u32>, Option<u32>, Option<u32>)>,
+            custodian_history: Vec<(Option<T::AccountId>, Option<u32>, Option<u32>, Option<u32>)>,
+            location_history: Vec<(Option<(Vec<u8>, Vec<u8>)>, Option<u32>, Option<u32>, Option<u32>)>,
+        },
+
+        RawMaterialUnitAccessLevelUpdate {
+            material_unit_id: T::UniqueId,
+            status: bool,
+        }
 
     }
 
@@ -1176,6 +1280,7 @@ pub mod pallet {
         InsufficientUnits,
         UnsupportedShippingAgent,
         PaymentFailed,
+        InvalidPropreitaryDataKey,
     }
 
     impl<T: Config> Pallet<T> {
@@ -1195,6 +1300,23 @@ pub mod pallet {
             // frame_system::Pallet::<T>::block_number();
             0
         }
+
+        pub fn unwrap_account_id(input: ProprietaryDataResult<T>) -> Option<T::AccountId> {
+            match input {
+                ProprietaryDataResult::Owner(owner) => Some(owner),
+                ProprietaryDataResult::Custodian(custodian) => Some(custodian),
+                _ => None,
+            }
+        }
+
+        pub fn unwrap_location(input: ProprietaryDataResult<T>) -> Option<(Vec<u8>, Vec<u8>)> {
+            match input {
+                ProprietaryDataResult::Location(location) => Some(location),
+                _ => None,
+            }
+        }
+
+
     }
 
     #[pallet::call]
@@ -1312,7 +1434,6 @@ pub mod pallet {
             Ok(())
         }
 
-        
 
         #[pallet::call_index(6)]
 		#[pallet::weight(T::WeightInfo::do_something())]
@@ -1573,8 +1694,8 @@ pub mod pallet {
             let delivery_token = Self::generate_unique_id();
             let order = Order::<T>::new(
                 order_id.clone(), supplier_id.clone(), buyer_account.clone(),
-               shipping_agent_id.clone(),   units.clone(),
-                delivery_token.clone(), 
+                shipping_agent_id.clone(), material_id.clone(),   units.clone(),
+                shipping_destination, delivery_token.clone(), 
                 OrderStatus::Confirmed
             );
 
@@ -1586,6 +1707,7 @@ pub mod pallet {
                 order_id: order_id,
                 supplier: supplier_id,
                 manufacturer: buyer_account,
+                material_id: material_id,
                 raw_material_units: units,
                 shipping_agent: shipping_agent_id.clone(),
                 status: OrderStatus::Confirmed
@@ -1601,15 +1723,71 @@ pub mod pallet {
         pub fn get_orders(
             _origin: OriginFor<T>
         ) -> DispatchResult{
-            
+            let orders = Orders::<T>::iter().map(|(order_id, _)| order_id).collect();
+            Self::deposit_event(Event::ResourcesRetreived {
+                name: b"Orders".to_vec(),
+                resources: orders
+            });
             Ok(())
         }
 
         #[pallet::call_index(14)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn create_shipment(
-            _origin: OriginFor<T>
+            origin: OriginFor<T>,
+            order_id: T::UniqueId,
         ) -> DispatchResult{
+            let sender = ensure_signed(origin)?;
+            let mut order = Orders::<T>::get(&order_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            ensure!(
+                order.is_shipping_agent(&sender),
+                Error::<T>::UnathorisedRequest
+            );
+            let mut shipping_agent = ShippingAgents::<T>::get(&sender).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            let (_, material_shipping) = RawMaterials::<T>::get(&order.get_material_id()).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            let current_block = Self::get_current_block_number();
+            for unit_id in order.get_raw_material_units() {
+                let mut raw_material_unit = RawMaterialUnits::<T>::get(&unit_id).ok_or(
+                    Error::<T>::ResourceDoesNotExist)?;
+                let custodian = Some(Custodian::new(
+                    sender.clone(), 
+                    current_block.clone()
+                ));
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Custodian(custodian),
+                    current_block.clone()
+                );
+                RawMaterialUnits::<T>::insert(unit_id.clone(), raw_material_unit);
+            }
+
+            let manifest_id = Self::generate_unique_id();
+            
+            let shipping_manifest = ShippingManifest::<T>::new(
+                manifest_id.clone(), order.get_id(), sender.clone(),
+                material_shipping.get_pickup_location(),
+                order.get_delivery_location(),
+                order.get_raw_material_units(),
+                OrderStatus::InProgress
+            );
+            shipping_agent.add_manifest(manifest_id.clone());
+            order.set_shipping_manifest(manifest_id.clone());
+            order.add_status(OrderStatus::InProgress);
+
+            Orders::<T>::insert(order_id.clone(), order.clone());
+            ShippingManifests::<T>::insert(manifest_id.clone(), shipping_manifest);
+            ShippingAgents::<T>::insert(sender.clone(), shipping_agent);
+
+            Self::deposit_event(Event::OrderShipped {
+                order_id: order_id,
+                manifest_id: manifest_id,
+                shipping_agent: order.get_shipping_agent(),
+                status: OrderStatus::InProgress
+            });
+            
+
             Ok(())
         }
 
@@ -1624,32 +1802,196 @@ pub mod pallet {
         #[pallet::call_index(16)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn update_shipping_location(
-            _origin: OriginFor<T>
+            origin: OriginFor<T>,
+            manifest_id: T::UniqueId,
+            location: (Vec<u8>, Vec<u8>)
         ) -> DispatchResult{
+            let sender = ensure_signed(origin)?;
+            let mut shipping_manifest = ShippingManifests::<T>::get(&manifest_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            ensure!(
+                shipping_manifest.is_shipping_agent(&sender),
+                Error::<T>::UnathorisedRequest
+            );
+            shipping_manifest.add_route_history(location.clone(), &sender);
+            for unit_id in shipping_manifest.get_raw_material_units() {
+                let mut raw_material_unit = RawMaterialUnits::<T>::get(&unit_id).ok_or(
+                    Error::<T>::ResourceDoesNotExist)?;
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Location(
+                        Some(Location::new(
+                            location.0.clone(),
+                            location.1.clone(),
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+                RawMaterialUnits::<T>::insert(unit_id.clone(), raw_material_unit);
+            }
+            ShippingManifests::<T>::insert(manifest_id.clone(), shipping_manifest);
+            Self::deposit_event(Event::ShippingLocationUpdated {
+                manifest_id: manifest_id,
+                location: location,
+                shipping_agent: sender
+            });
             Ok(())
         }
 
         #[pallet::call_index(17)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn complete_shipment(
-            _origin: OriginFor<T>
+            origin: OriginFor<T>,
+            manifest_id: T::UniqueId,
+            location: (Vec<u8>, Vec<u8>),
+            delivery_token: T::UniqueId
         ) -> DispatchResult{
+            let sender = ensure_signed(origin)?;
+            let mut shipping_manifest = ShippingManifests::<T>::get(&manifest_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            ensure!(
+                shipping_manifest.is_shipping_agent(&sender),
+                Error::<T>::UnathorisedRequest
+            );
+            ensure!(
+                shipping_manifest.is_delivery_location(&location),
+                Error::<T>::UnathorisedRequest
+            );
+            let order_id = shipping_manifest.get_order_id();
+            let mut order = Orders::<T>::get(&order_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            ensure!(
+                order.is_delivery_token(&delivery_token),
+                Error::<T>::UnathorisedRequest
+            );
+            shipping_manifest.add_route_history(location.clone(), &sender);
+            
+            let custodian = Custodian::new(
+                order.get_manufacturer(),
+                Self::get_current_block_number()
+            );
+            for unit_id in shipping_manifest.get_raw_material_units() {
+                let mut raw_material_unit = RawMaterialUnits::<T>::get(&unit_id).ok_or(
+                    Error::<T>::ResourceDoesNotExist)?;
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Location(
+                        Some(Location::new(
+                            location.0.clone(),
+                            location.1.clone(),
+                            Self::get_current_block_number()
+                        ))
+                    ),
+                    Self::get_current_block_number()
+                );
+                raw_material_unit.update_proprietary_data(
+                    ProprietaryDataInput::Custodian(Some(custodian.clone())),
+                    Self::get_current_block_number()
+                );
+                RawMaterialUnits::<T>::insert(unit_id.clone(), raw_material_unit);
+            }
+
+            order.add_status(OrderStatus::Completed);
+
+            Orders::<T>::insert(order_id.clone(), order);
+            ShippingManifests::<T>::insert(manifest_id.clone(), shipping_manifest);
+            Self::deposit_event(Event::OrderCompleted {
+                order_id: order_id,
+                manifest_id: manifest_id,
+                status: OrderStatus::Completed
+            });
             Ok(())
         }
 
         #[pallet::call_index(18)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn get_raw_material_unit_data(
-            _origin: OriginFor<T>
+            origin: OriginFor<T>,
+            material_unit_id: T::UniqueId
         ) -> DispatchResult{
+            let actor_id = ensure_signed(origin)?;
+            let raw_material_unit = RawMaterialUnits::<T>::get(&material_unit_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+            
+            let actor_access_level = if raw_material_unit.is_owner(actor_id.clone()) {
+                AccessLevel::Owner
+            } else if raw_material_unit.is_custodian(actor_id.clone()) {
+                AccessLevel::Custodian
+            } else {
+                AccessLevel::AllUsers
+            };
+
+            let owner_history = raw_material_unit.get_proprietary_data_history_for_actor(
+                actor_access_level.clone(), ProprietaryDataInput::Owner(None)
+            );
+            let custodian_history = raw_material_unit.get_proprietary_data_history_for_actor(
+                actor_access_level.clone(), ProprietaryDataInput::Custodian(None));
+
+            let location_history = raw_material_unit.get_proprietary_data_history_for_actor(
+                actor_access_level, ProprietaryDataInput::Location(None)
+            );
+            
+            let (material, _) = RawMaterials::<T>::get(&raw_material_unit.get_material_id()).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+
+
+            Self::deposit_event(Event::RawMaterialUnitDataRetrieved {
+                material_id: raw_material_unit.get_material_id(),
+                material_name: material.get_name(),
+                material_price: material.get_price(),
+                unit_id: material_unit_id,
+                owner_history: owner_history.into_iter().map(
+                    |(result, index, start, end)| {
+                    (Self::unwrap_account_id(result), index, start, end)
+                }).collect(),
+
+                custodian_history: custodian_history.into_iter()
+                .map(|(result, index, start, end)| {
+                        (Self::unwrap_account_id(result), index, start, end)
+                    }).collect(),
+
+                location_history : location_history.into_iter()
+                .map(|(result, index, start, end)| {
+                        (Self::unwrap_location(result), index, start, end)
+                    }).collect(),
+            });
+
             Ok(())
         }
 
         #[pallet::call_index(19)]
         #[pallet::weight(T::WeightInfo::do_something())]
         pub fn set_raw_material_unit_access_level(
-            _origin: OriginFor<T>
+            origin: OriginFor<T>, material_unit_id: T::UniqueId,
+            access_level: AccessLevel, proprietary_data: Vec<u8>,
+            index: u32
         ) -> DispatchResult{
+            let sender = ensure_signed(origin)?;
+            
+            let proprietary_data_input = match proprietary_data.as_slice() {
+                b"Owner" => ProprietaryDataInput::Owner(None),
+                b"Custodian" => ProprietaryDataInput::Custodian(None),
+                b"Location" => ProprietaryDataInput::Location(None),
+                _ => ProprietaryDataInput::Invalid(None),
+            };
+            ensure!(
+                proprietary_data_input != ProprietaryDataInput::Invalid(None),
+                Error::<T>::InvalidPropreitaryDataKey
+            );
+
+            let mut raw_material_unit = RawMaterialUnits::<T>::get(&material_unit_id).ok_or(
+                Error::<T>::ResourceDoesNotExist)?;
+
+            let result = raw_material_unit.set_access_level(
+                proprietary_data_input, access_level, sender.clone(),
+                index
+            );
+
+            RawMaterialUnits::<T>::insert(material_unit_id.clone(), raw_material_unit);
+
+            Self::deposit_event(Event::RawMaterialUnitAccessLevelUpdate {
+                material_unit_id: material_unit_id,
+                status: result
+            });
             Ok(())
         }
 
